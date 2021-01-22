@@ -20,6 +20,13 @@ var (
 	exit       = 0
 	fileSet    = token.NewFileSet()
 	parserMode parser.Mode
+
+	Identifiers = []*ast.Ident{}
+	info        = &types.Info{
+		Defs:  make(map[*ast.Ident]types.Object),
+		Uses:  make(map[*ast.Ident]types.Object),
+		Types: make(map[ast.Expr]types.TypeAndValue),
+	}
 )
 
 func main() {
@@ -44,9 +51,33 @@ type VisitorFunc func(n ast.Node) ast.Visitor
 
 func (f VisitorFunc) Visit(n ast.Node) ast.Visitor { return f(n) }
 
+func assingToDecl(assign *ast.AssignStmt) (decl *ast.DeclStmt, e error) {
+	gen := *ast.GenDecl{}
+
+	for i, l := range assign.Lhs {
+		if ident, ok := l.(*ast.Ident); ok {
+			r := assign.Rhs[i]
+			if expr, ok := r.(ast.Expr); ok {
+
+			}
+		}
+	}
+
+	return decl, nil
+}
+
 func FindTypes(n ast.Node) ast.Visitor {
 	if decl, ok := n.(*ast.AssignStmt); ok {
 		for _, l := range decl.Lhs {
+			if ident, ok := l.(*ast.Ident); ok {
+				Identifiers = append(Identifiers, ident)
+				if obj, ok := info.Defs[ident]; ok {
+					fmt.Printf("%+v obj \n", obj)
+				} else {
+					fmt.Println("No object for ", ident)
+				}
+			}
+
 			fmt.Println("left", l)
 		}
 		for _, r := range decl.Rhs {
@@ -87,33 +118,25 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error
 		return err
 	}
 
-	ast.Walk(VisitorFunc(FindTypes), file)
-	fmt.Printf("%+v %+v \n", fileSet, file)
-
 	conf := types.Config{Importer: importer.Default()}
-	info := &types.Info{
-		Defs:  make(map[*ast.Ident]types.Object),
-		Uses:  make(map[*ast.Ident]types.Object),
-		Types: make(map[ast.Expr]types.TypeAndValue),
-	}
 
 	pkg, err := conf.Check(filename, fileSet, []*ast.File{file}, info)
 	if err != nil {
 		log.Fatal(err) // type error
 	}
 
-	fmt.Printf("%+v\n", pkg)
-	fmt.Printf("%+v\n", info)
-	fmt.Println("Defs : ", info.Defs)
-	for id, obj := range info.Defs {
-		fmt.Printf("%s: %q defines %v\n",
-			fileSet.Position(id.Pos()), id.Name, obj)
-		if obj.Type != nil {
+	ast.Walk(VisitorFunc(FindTypes), file)
 
-			fmt.Println(obj.Type())
-		}
+	fmt.Println("Defs : ", info.Defs)
+	fmt.Println("Types : ", info.Types)
+	for id, obj := range info.Defs {
+		fmt.Printf("Def : %+v %+v \n", id, obj)
 
 	}
+	for k, v := range info.Types {
+		fmt.Printf("Type %+v %+v \n", k, v)
+	}
+
 	ast.Inspect(file, func(n ast.Node) bool {
 		if expr, ok := n.(ast.Expr); ok {
 			if tv, ok := info.Types[expr]; ok {
@@ -134,6 +157,14 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error
 		c := pkg.Scope().Child(i)
 		fmt.Println(c.Names(), "Names")
 	}
+
+	for _, ident := range Identifiers {
+		fmt.Printf("%+v ident \n", ident)
+		if obj, ok := info.Defs[ident]; ok {
+			fmt.Printf("%+v obj \n", obj)
+		}
+	}
+
 	return nil
 }
 
