@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"go/ast"
 	"go/importer"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"go/types"
 	"io"
@@ -27,6 +29,11 @@ var (
 		Uses:  make(map[*ast.Ident]types.Object),
 		Types: make(map[ast.Expr]types.TypeAndValue),
 	}
+
+	tabWidth = 8
+
+	printerMode                          = printer.UseSpaces | printer.TabIndent | printerNormalizeNumbers
+	printerNormalizeNumbers printer.Mode = 1 << 30
 )
 
 func main() {
@@ -52,43 +59,65 @@ type VisitorFunc func(n ast.Node) ast.Visitor
 func (f VisitorFunc) Visit(n ast.Node) ast.Visitor { return f(n) }
 
 func assingToDecl(assign *ast.AssignStmt) (decl *ast.DeclStmt, e error) {
-	gen := *ast.GenDecl{}
+	gen := &ast.GenDecl{
+		Doc:    nil,
+		Tok:    token.VAR,
+		Lparen: token.NoPos,
+		Rparen: token.NoPos,
+		Specs:  make([]ast.Spec, 1),
+	}
+	sp := &ast.ValueSpec{
+		Comment: nil,
+		Doc:     nil,
+		Names:   make([]*ast.Ident, len(assign.Lhs)),
+		Values:  make([]ast.Expr, len(assign.Rhs)),
+	}
+	sp.Comment = nil
+	sp.Doc = nil
 
+	// token_incr := 4
 	for i, l := range assign.Lhs {
 		if ident, ok := l.(*ast.Ident); ok {
-			r := assign.Rhs[i]
-			if expr, ok := r.(ast.Expr); ok {
-
+			if obj, ok := info.Defs[ident]; ok {
+				fmt.Printf("%+v obj \n", obj.Type())
+				sp.Type = &ast.Ident{
+					Name: obj.Type().String(),
+				}
+				if i == 0 {
+					gen.TokPos = l.Pos()
+				}
+				r := assign.Rhs[i]
+				if expr, ok := r.(ast.Expr); ok {
+					sp.Names[i] = ident
+					sp.Values[i] = expr
+				}
 			}
 		}
 	}
 
+	decl = &ast.DeclStmt{Decl: gen}
 	return decl, nil
 }
 
 func FindTypes(n ast.Node) ast.Visitor {
 	if decl, ok := n.(*ast.AssignStmt); ok {
-		for _, l := range decl.Lhs {
-			if ident, ok := l.(*ast.Ident); ok {
-				Identifiers = append(Identifiers, ident)
-				if obj, ok := info.Defs[ident]; ok {
-					fmt.Printf("%+v obj \n", obj)
-				} else {
-					fmt.Println("No object for ", ident)
-				}
-			}
-
-			fmt.Println("left", l)
-		}
-		for _, r := range decl.Rhs {
-			fmt.Println("right", r)
+		gen, err := assingToDecl(decl)
+		if err != nil {
+			fmt.Println(err)
+			return nil
 		}
 
-		fmt.Printf("%+v \n", n)
-		fmt.Println(n, "Assgin function ! ")
 		return nil
 	}
 	return VisitorFunc(FindTypes)
+}
+
+func walkPrev(c *Cursor) bool {
+	return false
+}
+
+func walkNext(c *Cursor) bool {
+	return false
 }
 
 func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error {
@@ -124,6 +153,8 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error
 	if err != nil {
 		log.Fatal(err) // type error
 	}
+
+	astutil.Apply(file)
 
 	ast.Walk(VisitorFunc(FindTypes), file)
 
@@ -161,9 +192,18 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error
 	for _, ident := range Identifiers {
 		fmt.Printf("%+v ident \n", ident)
 		if obj, ok := info.Defs[ident]; ok {
-			fmt.Printf("%+v obj \n", obj)
+			fmt.Printf("%+v obj \n", obj.Type())
 		}
 	}
+
+	var buf bytes.Buffer
+	cfg := printer.Config{Mode: printerMode, Tabwidth: tabWidth}
+	err = cfg.Fprint(&buf, fileSet, file)
+	if err != nil {
+		return nil
+	}
+
+	fmt.Print(string(buf.Bytes()))
 
 	return nil
 }

@@ -1,6 +1,9 @@
 package test
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // Note: Lhs -> Names, Rhs -> Values,
 //
@@ -96,5 +99,7 @@ func main() {
 	a, d := 1, 2
 	var b, e int = 2, 5
 	c := uint8(3)
-	fmt.Println(a+b, c, d, e)
+	var f float64 = math.Abs(3)
+
+	fmt.Println(a+b, c, d, e, f)
 }
