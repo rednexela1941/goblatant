@@ -79,6 +79,8 @@ func report(e error) {
 	exit = 2
 }
 
+var MainPackage *types.Package
+
 func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error {
 	var perm os.FileMode = 0644
 	if in == nil {
@@ -107,7 +109,7 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error
 
 	conf := types.Config{Importer: importer.Default()}
 
-	_, err = conf.Check(filename, fileSet, []*ast.File{file}, typeInformation)
+	MainPackage, err = conf.Check(filename, fileSet, []*ast.File{file}, typeInformation)
 	if err != nil {
 		return err
 	}
@@ -204,11 +206,13 @@ func assignToDecl(c *astutil.Cursor, assign *ast.AssignStmt) {
 
 	for _, l := range assign.Lhs {
 		if ident, ok := l.(*ast.Ident); ok {
-			if ident.String() == "_" {
+			if ident.String() == "_" || ident.Obj.Decl != assign {
 				continue
 			}
-			if obj, ok := typeInformation.Defs[ident]; ok && ident.Obj.Decl == assign {
-				decl := makeDecl(assign, ident, obj.Type().String(), length)
+			if obj, ok := typeInformation.Defs[ident]; ok {
+				fmt.Printf("Type %+v \n", obj.Type().String())
+				typstr := types.TypeString(obj.Type(), types.RelativeTo(MainPackage))
+				decl := makeDecl(assign, ident, typstr, length)
 				decls = append(decls, decl)
 			}
 		}
