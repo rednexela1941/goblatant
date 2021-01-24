@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -78,48 +77,6 @@ func visitFile(path string, f os.FileInfo, err error) error {
 func report(e error) {
 	fmt.Fprintln(os.Stderr, e.Error())
 	exit = 2
-}
-
-func assingToDecl(assign *ast.AssignStmt) (decl *ast.DeclStmt, e error) {
-	gen := &ast.GenDecl{
-		Doc:    nil,
-		Tok:    token.VAR,
-		Lparen: token.NoPos,
-		Rparen: token.NoPos,
-		Specs:  make([]ast.Spec, 0),
-	}
-	sp := &ast.ValueSpec{
-		Comment: nil,
-		Doc:     nil,
-		Names:   make([]*ast.Ident, len(assign.Lhs)),
-		Values:  make([]ast.Expr, len(assign.Rhs)),
-	}
-
-	for i, l := range assign.Lhs {
-		if ident, ok := l.(*ast.Ident); ok {
-			if ident.String() == "_" {
-				return nil, errors.New("ignored variable")
-			}
-			sp.Names[i] = ast.NewIdent(ident.Name)
-
-			if obj, ok := typeInformation.Defs[ident]; ok {
-				sp.Type = &ast.Ident{
-					Name: obj.Type().String(),
-				}
-				sp.Names[i] = ast.NewIdent(ident.Name)
-				r := assign.Rhs[i]
-
-				sp.Values[i] = r
-			}
-		} else {
-			return nil, errors.New("invalid statement")
-		}
-	}
-
-	gen.Specs = append(gen.Specs, sp)
-
-	decl = &ast.DeclStmt{Decl: gen}
-	return decl, nil
 }
 
 func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error {
@@ -227,13 +184,52 @@ func walkPre(c *astutil.Cursor) bool {
 	n := c.Node()
 
 	if assign, ok := n.(*ast.AssignStmt); ok {
-		if _, ok := c.Parent().(*ast.BlockStmt); ok {
-			decl, err := assingToDecl(assign)
-			if err != nil {
-				return true
-			}
-			c.Replace(decl)
-		}
+		assignToDecl(c, assign)
 	}
+
 	return true
+}
+
+func assignToDecl(c *astutil.Cursor, assign *ast.AssignStmt) {
+	if _, ok := c.Parent().(*ast.BlockStmt); !ok {
+		return
+	}
+
+	if assign.Tok != token.DEFINE {
+		return
+	}
+
+	gen := &ast.GenDecl{
+		Doc:    nil,
+		Tok:    token.VAR,
+		Lparen: token.NoPos,
+		Rparen: token.NoPos,
+		Specs:  make([]ast.Spec, 0),
+	}
+	sp := &ast.ValueSpec{
+		Comment: nil,
+		Doc:     nil,
+		Names:   make([]*ast.Ident, len(assign.Lhs)),
+		Values:  make([]ast.Expr, len(assign.Rhs)),
+	}
+
+	for i, l := range assign.Lhs {
+		if ident, ok := l.(*ast.Ident); ok {
+			sp.Names[i] = ast.NewIdent(ident.Name)
+			if obj, ok := typeInformation.Defs[ident]; ok {
+				sp.Type = &ast.Ident{
+					Name: obj.Type().String(),
+				}
+				sp.Names[i] = ast.NewIdent(ident.Name)
+				r := assign.Rhs[i]
+				sp.Values[i] = r
+				continue
+			}
+		}
+		return
+	}
+
+	gen.Specs = append(gen.Specs, sp)
+	decl := &ast.DeclStmt{Decl: gen}
+	c.Replace(decl)
 }
