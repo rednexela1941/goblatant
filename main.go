@@ -16,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/tools/go/ast/astutil"
 )
 
 var (
@@ -23,17 +25,17 @@ var (
 	fileSet    = token.NewFileSet()
 	parserMode parser.Mode
 
-	Identifiers = []*ast.Ident{}
-	info        = &types.Info{
+	typeInformation = &types.Info{
 		Defs:  make(map[*ast.Ident]types.Object),
 		Uses:  make(map[*ast.Ident]types.Object),
 		Types: make(map[ast.Expr]types.TypeAndValue),
 	}
 
-	tabWidth = 8
-
+	tabWidth                             = 8
 	printerMode                          = printer.UseSpaces | printer.TabIndent | printerNormalizeNumbers
 	printerNormalizeNumbers printer.Mode = 1 << 30
+
+	isBlock = false
 )
 
 func main() {
@@ -54,9 +56,27 @@ func main() {
 	os.Exit(exit)
 }
 
-type VisitorFunc func(n ast.Node) ast.Visitor
+func isGoFile(f os.FileInfo) bool {
+	name := f.Name()
+	return !f.IsDir() && !strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".go")
+}
 
-func (f VisitorFunc) Visit(n ast.Node) ast.Visitor { return f(n) }
+func visitFile(path string, f os.FileInfo, err error) error {
+	if err == nil && isGoFile(f) {
+		err = processFile(path, nil, os.Stdout, false)
+	}
+	// Don't complain if a file was deleted in the meantime (i.e.
+	// the directory changed concurrently while running gofmt).
+	if err != nil && !os.IsNotExist(err) {
+		report(err)
+	}
+	return nil
+}
+
+func report(e error) {
+	fmt.Fprintln(os.Stderr, e.Error())
+	exit = 2
+}
 
 func assingToDecl(assign *ast.AssignStmt) (decl *ast.DeclStmt, e error) {
 	gen := &ast.GenDecl{
@@ -64,7 +84,7 @@ func assingToDecl(assign *ast.AssignStmt) (decl *ast.DeclStmt, e error) {
 		Tok:    token.VAR,
 		Lparen: token.NoPos,
 		Rparen: token.NoPos,
-		Specs:  make([]ast.Spec, 1),
+		Specs:  make([]ast.Spec, 0),
 	}
 	sp := &ast.ValueSpec{
 		Comment: nil,
@@ -72,14 +92,11 @@ func assingToDecl(assign *ast.AssignStmt) (decl *ast.DeclStmt, e error) {
 		Names:   make([]*ast.Ident, len(assign.Lhs)),
 		Values:  make([]ast.Expr, len(assign.Rhs)),
 	}
-	sp.Comment = nil
-	sp.Doc = nil
 
 	// token_incr := 4
 	for i, l := range assign.Lhs {
 		if ident, ok := l.(*ast.Ident); ok {
-			if obj, ok := info.Defs[ident]; ok {
-				fmt.Printf("%+v obj \n", obj.Type())
+			if obj, ok := typeInformation.Defs[ident]; ok {
 				sp.Type = &ast.Ident{
 					Name: obj.Type().String(),
 				}
@@ -87,37 +104,16 @@ func assingToDecl(assign *ast.AssignStmt) (decl *ast.DeclStmt, e error) {
 					gen.TokPos = l.Pos()
 				}
 				r := assign.Rhs[i]
-				if expr, ok := r.(ast.Expr); ok {
-					sp.Names[i] = ident
-					sp.Values[i] = expr
-				}
+				sp.Names[i] = ast.NewIdent(ident.Name)
+				sp.Values[i] = r
 			}
 		}
 	}
 
+	gen.Specs = append(gen.Specs, sp)
+
 	decl = &ast.DeclStmt{Decl: gen}
 	return decl, nil
-}
-
-func FindTypes(n ast.Node) ast.Visitor {
-	if decl, ok := n.(*ast.AssignStmt); ok {
-		gen, err := assingToDecl(decl)
-		if err != nil {
-			fmt.Println(err)
-			return nil
-		}
-
-		return nil
-	}
-	return VisitorFunc(FindTypes)
-}
-
-func walkPrev(c *Cursor) bool {
-	return false
-}
-
-func walkNext(c *Cursor) bool {
-	return false
 }
 
 func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error {
@@ -149,83 +145,45 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error
 
 	conf := types.Config{Importer: importer.Default()}
 
-	pkg, err := conf.Check(filename, fileSet, []*ast.File{file}, info)
+	_, err = conf.Check(filename, fileSet, []*ast.File{file}, typeInformation)
 	if err != nil {
-		log.Fatal(err) // type error
+		return err
 	}
 
-	astutil.Apply(file)
+	result := astutil.Apply(file, walkPre, walkPost)
 
-	ast.Walk(VisitorFunc(FindTypes), file)
-
-	fmt.Println("Defs : ", info.Defs)
-	fmt.Println("Types : ", info.Types)
-	for id, obj := range info.Defs {
-		fmt.Printf("Def : %+v %+v \n", id, obj)
-
-	}
-	for k, v := range info.Types {
-		fmt.Printf("Type %+v %+v \n", k, v)
-	}
-
-	ast.Inspect(file, func(n ast.Node) bool {
-		if expr, ok := n.(ast.Expr); ok {
-			if tv, ok := info.Types[expr]; ok {
-				fmt.Printf("\t\t\t\ttype:  %v\n", tv.Type)
-				if tv.Value != nil {
-					fmt.Printf("\t\t\t\tvalue: %v\n", tv.Value)
-				}
-			}
-		}
-		return true
-	})
-
-	fmt.Printf("Package  %q\n", pkg.Path())
-	fmt.Printf("Name:    %s\n", pkg.Name())
-	fmt.Printf("Imports: %s\n", pkg.Imports())
-	fmt.Printf("Scope:   %s\n", pkg.Scope().Names())
-	for i := 0; i < pkg.Scope().Len(); i++ {
-		c := pkg.Scope().Child(i)
-		fmt.Println(c.Names(), "Names")
-	}
-
-	for _, ident := range Identifiers {
-		fmt.Printf("%+v ident \n", ident)
-		if obj, ok := info.Defs[ident]; ok {
-			fmt.Printf("%+v obj \n", obj.Type())
-		}
-	}
-
+	ast.Print(fileSet, result) // print the abstract syntax tree.
 	var buf bytes.Buffer
 	cfg := printer.Config{Mode: printerMode, Tabwidth: tabWidth}
-	err = cfg.Fprint(&buf, fileSet, file)
+	err = cfg.Fprint(&buf, fileSet, result)
 	if err != nil {
-		return nil
+		log.Fatal(err)
 	}
-
 	fmt.Print(string(buf.Bytes()))
-
 	return nil
 }
 
-func isGoFile(f os.FileInfo) bool {
-	name := f.Name()
-	return !f.IsDir() && !strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".go")
+// No need to walk back.
+func walkPost(c *astutil.Cursor) bool {
+	return true
 }
 
-func visitFile(path string, f os.FileInfo, err error) error {
-	if err == nil && isGoFile(f) {
-		err = processFile(path, nil, os.Stdout, false)
-	}
-	// Don't complain if a file was deleted in the meantime (i.e.
-	// the directory changed concurrently while running gofmt).
-	if err != nil && !os.IsNotExist(err) {
-		report(err)
-	}
-	return nil
-}
+// replace short assignments with typed variable declarations.
+func walkPre(c *astutil.Cursor) bool {
+	fmt.Println("Cursor! ", c.Name(), c.Node())
+	n := c.Node()
 
-func report(e error) {
-	fmt.Fprintln(os.Stderr, e.Error())
-	exit = 2
+	// handle transformations inside of if/for etc.
+	switch t := n.(type) {
+	case *ast.AssignStmt:
+		decl, err := assingToDecl(assign)
+		if err != nil {
+			fmt.Println(err)
+			return true
+		}
+		c.Replace(decl)
+		return true
+	default:
+		return true
+	}
 }

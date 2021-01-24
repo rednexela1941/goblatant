@@ -2,7 +2,6 @@ package test
 
 import (
 	"fmt"
-	"math"
 )
 
 // Note: Lhs -> Names, Rhs -> Values,
@@ -95,11 +94,28 @@ import (
 //    127  .  .  .  .  .  .  }
 //    128  .  .  .  .  .  }
 
-func main() {
-	a, d := 1, 2
-	var b, e int = 2, 5
-	c := uint8(3)
-	var f float64 = math.Abs(3)
+// type DataForm struct {
+// 	x int
+// 	y int
+// }
 
-	fmt.Println(a+b, c, d, e, f)
+func main() {
+	var a int = 1
+	b := fmt.Sprintf("New %d", a)
+	if true {
+		var a int = 10
+		fmt.Println(a)
+	}
+	if x := true; x {
+		fmt.Println(x)
+	}
+	fmt.Println(a, b)
+	// h := DataForm{x: 10, y: 20}
+	// d := fmt.Sprintf("Ne String %s", "Wahteer")
+	// g := 2 + 3
+	// var b, e int = 2, 5
+	// c := uint8(3)
+	// var f float64 = math.Abs(3)
+
+	// fmt.Println(a+b, c, e, f, d, g, h)
 }
