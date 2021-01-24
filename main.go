@@ -34,8 +34,6 @@ var (
 	tabWidth                             = 8
 	printerMode                          = printer.UseSpaces | printer.TabIndent | printerNormalizeNumbers
 	printerNormalizeNumbers printer.Mode = 1 << 30
-
-	isBlock = false
 )
 
 func main() {
@@ -168,22 +166,20 @@ func walkPost(c *astutil.Cursor) bool {
 	return true
 }
 
-// replace short assignments with typed variable declarations.
+// walk nodes in syntax tree and swap block-scoped assignments for typed declarations.
 func walkPre(c *astutil.Cursor) bool {
 	fmt.Println("Cursor! ", c.Name(), c.Node())
 	n := c.Node()
 
-	// handle transformations inside of if/for etc.
-	switch t := n.(type) {
-	case *ast.AssignStmt:
-		decl, err := assingToDecl(assign)
-		if err != nil {
-			fmt.Println(err)
-			return true
+	if assign, ok := n.(*ast.AssignStmt); ok {
+		if _, ok := c.Parent().(*ast.BlockStmt); ok {
+			decl, err := assingToDecl(assign)
+			if err != nil {
+				fmt.Println(err)
+				return true
+			}
+			c.Replace(decl)
 		}
-		c.Replace(decl)
-		return true
-	default:
-		return true
 	}
+	return true
 }
