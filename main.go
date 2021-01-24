@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -15,12 +16,15 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"golang.org/x/tools/go/ast/astutil"
 )
 
 var (
+	write = flag.Bool("w", false, "write to source file instead of stdout")
+
 	exit       = 0
 	fileSet    = token.NewFileSet()
 	parserMode parser.Mode
@@ -91,20 +95,24 @@ func assingToDecl(assign *ast.AssignStmt) (decl *ast.DeclStmt, e error) {
 		Values:  make([]ast.Expr, len(assign.Rhs)),
 	}
 
-	// token_incr := 4
 	for i, l := range assign.Lhs {
 		if ident, ok := l.(*ast.Ident); ok {
+			if ident.String() == "_" {
+				return nil, errors.New("ignored variable")
+			}
+			sp.Names[i] = ast.NewIdent(ident.Name)
+
 			if obj, ok := typeInformation.Defs[ident]; ok {
 				sp.Type = &ast.Ident{
 					Name: obj.Type().String(),
 				}
-				if i == 0 {
-					gen.TokPos = l.Pos()
-				}
-				r := assign.Rhs[i]
 				sp.Names[i] = ast.NewIdent(ident.Name)
+				r := assign.Rhs[i]
+
 				sp.Values[i] = r
 			}
+		} else {
+			return nil, errors.New("invalid statement")
 		}
 	}
 
@@ -129,7 +137,6 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error
 		in = f
 		perm = fi.Mode().Perm()
 	}
-	fmt.Println(perm)
 
 	src, err := ioutil.ReadAll(in)
 	if err != nil {
@@ -147,18 +154,67 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error
 	if err != nil {
 		return err
 	}
-
 	result := astutil.Apply(file, walkPre, walkPost)
-
-	ast.Print(fileSet, result) // print the abstract syntax tree.
-	var buf bytes.Buffer
+	// 	ast.Print(fileSet, result) // print the abstract syntax tree.
 	cfg := printer.Config{Mode: printerMode, Tabwidth: tabWidth}
+
+	var buf bytes.Buffer
 	err = cfg.Fprint(&buf, fileSet, result)
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Print(string(buf.Bytes()))
+	// fmt.Print(string(buf.Bytes()))
+
+	if *write {
+		// make a temporary backup before overwriting original
+		bakname, err := backupFile(filename+".", src, perm)
+		if err != nil {
+			return err
+		}
+		err = ioutil.WriteFile(filename, buf.Bytes(), perm)
+		if err != nil {
+			os.Rename(bakname, filename)
+			return err
+		}
+
+		err = os.Remove(bakname)
+		if err != nil {
+			return err
+		}
+	} else {
+		_, err = out.Write(buf.Bytes())
+		return err
+	}
+
 	return nil
+}
+
+const chmodSupported = runtime.GOOS != "windows"
+
+// backupFile writes data to a new file named filename<number> with permissions perm,
+// with <number randomly chosen such that the file name is unique. backupFile returns
+// the chosen file name.
+func backupFile(filename string, data []byte, perm os.FileMode) (string, error) {
+	// create backup file
+	f, err := ioutil.TempFile(filepath.Dir(filename), filepath.Base(filename))
+	if err != nil {
+		return "", err
+	}
+	bakname := f.Name()
+	if chmodSupported {
+		err = f.Chmod(perm)
+		if err != nil {
+			f.Close()
+			os.Remove(bakname)
+			return bakname, err
+		}
+	}
+	// write data to backup file
+	_, err = f.Write(data)
+	if err1 := f.Close(); err == nil {
+		err = err1
+	}
+	return bakname, err
 }
 
 // No need to walk back.
@@ -168,14 +224,12 @@ func walkPost(c *astutil.Cursor) bool {
 
 // walk nodes in syntax tree and swap block-scoped assignments for typed declarations.
 func walkPre(c *astutil.Cursor) bool {
-	fmt.Println("Cursor! ", c.Name(), c.Node())
 	n := c.Node()
 
 	if assign, ok := n.(*ast.AssignStmt); ok {
 		if _, ok := c.Parent().(*ast.BlockStmt); ok {
 			decl, err := assingToDecl(assign)
 			if err != nil {
-				fmt.Println(err)
 				return true
 			}
 			c.Replace(decl)
