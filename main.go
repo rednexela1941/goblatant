@@ -199,38 +199,57 @@ func assignToDecl(c *astutil.Cursor, assign *ast.AssignStmt) {
 		return
 	}
 
+	decls := make([]*ast.DeclStmt, 0)
+	length := len(assign.Lhs)
+
+	for _, l := range assign.Lhs {
+		if ident, ok := l.(*ast.Ident); ok {
+			if ident.String() == "_" {
+				continue
+			}
+			if obj, ok := typeInformation.Defs[ident]; ok && ident.Obj.Decl == assign {
+				decl := makeDecl(assign, ident, obj.Type().String(), length)
+				decls = append(decls, decl)
+			}
+		}
+	}
+
+	assign.Tok = token.ASSIGN // =
+
+	for _, d := range decls {
+		if length == 1 {
+			c.Replace(d)
+			return
+		}
+		c.InsertBefore(d)
+	}
+	c.Replace(assign)
+}
+
+func makeDecl(assign *ast.AssignStmt, ident *ast.Ident, identType string, length int) *ast.DeclStmt {
 	gen := &ast.GenDecl{
 		Doc:    nil,
 		Tok:    token.VAR,
 		Lparen: token.NoPos,
 		Rparen: token.NoPos,
-		Specs:  make([]ast.Spec, 0),
+		Specs:  make([]ast.Spec, 1),
 	}
 	sp := &ast.ValueSpec{
 		Comment: nil,
 		Doc:     nil,
-		Names:   make([]*ast.Ident, len(assign.Lhs)),
-		Values:  make([]ast.Expr, len(assign.Rhs)),
+		Names: []*ast.Ident{
+			ast.NewIdent(ident.Name),
+		},
+		Values: nil,
+		Type:   ast.NewIdent(identType),
 	}
-
-	for i, l := range assign.Lhs {
-		if ident, ok := l.(*ast.Ident); ok {
-			fmt.Printf("%+v %t\n", ident.Obj.Decl, ident.Obj.Decl == assign)
-			sp.Names[i] = ast.NewIdent(ident.Name)
-			if obj, ok := typeInformation.Defs[ident]; ok {
-				sp.Type = &ast.Ident{
-					Name: obj.Type().String(),
-				}
-				sp.Names[i] = ast.NewIdent(ident.Name)
-				r := assign.Rhs[i]
-				sp.Values[i] = r
-				continue
-			}
+	gen.Specs[0] = sp
+	if length == 1 {
+		sp.Values = []ast.Expr{
+			assign.Rhs[0],
 		}
-		return
 	}
 
-	gen.Specs = append(gen.Specs, sp)
 	decl := &ast.DeclStmt{Decl: gen}
-	c.Replace(decl)
+	return decl
 }
