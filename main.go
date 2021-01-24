@@ -215,6 +215,7 @@ func assignToDecl(c *astutil.Cursor, assign *ast.AssignStmt) {
 
 	for i, l := range assign.Lhs {
 		if ident, ok := l.(*ast.Ident); ok {
+			fmt.Printf("%+v %t\n", ident.Obj.Decl, ident.Obj.Decl == assign)
 			sp.Names[i] = ast.NewIdent(ident.Name)
 			if obj, ok := typeInformation.Defs[ident]; ok {
 				sp.Type = &ast.Ident{
