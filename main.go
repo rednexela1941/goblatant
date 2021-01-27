@@ -24,15 +24,18 @@ import (
 var (
 	write = flag.Bool("w", false, "write to source file instead of stdout")
 
-	exit       = 0
-	fileSet    = token.NewFileSet()
-	parserMode parser.Mode
+	exit    = 0
+	fileSet = token.NewFileSet()
+
+	parserMode parser.Mode = 0
 
 	typeInformation = &types.Info{
 		Defs:  make(map[*ast.Ident]types.Object),
 		Uses:  make(map[*ast.Ident]types.Object),
 		Types: make(map[ast.Expr]types.TypeAndValue),
 	}
+
+	packageToIdentifier = make(map[string]string)
 
 	tabWidth                             = 8
 	printerMode                          = printer.UseSpaces | printer.TabIndent | printerNormalizeNumbers
@@ -102,6 +105,7 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error
 		return err
 	}
 
+	// parserMode should use |parseComments -- we will sort this out later.
 	file, err := parser.ParseFile(fileSet, filename, src, parserMode)
 	if err != nil {
 		return err
@@ -140,12 +144,12 @@ func processFile(filename string, in io.Reader, out io.Writer, stdin bool) error
 		if err != nil {
 			return err
 		}
-	} else {
-		_, err = out.Write(buf.Bytes())
-		return err
+		return nil
 	}
 
-	return nil
+	_, err = out.Write(buf.Bytes())
+
+	return err
 }
 
 const chmodSupported = runtime.GOOS != "windows"
@@ -189,6 +193,14 @@ func walkPre(c *astutil.Cursor) bool {
 		assignToDecl(c, assign)
 	}
 
+	if imp, ok := n.(*ast.ImportSpec); ok {
+		if imp.Path != nil {
+			fmt.Println("Path", imp.Path.Value)
+		}
+
+		fmt.Printf("Import spec %+v\n", imp)
+	}
+
 	return true
 }
 
@@ -210,8 +222,9 @@ func assignToDecl(c *astutil.Cursor, assign *ast.AssignStmt) {
 				continue
 			}
 			if obj, ok := typeInformation.Defs[ident]; ok {
-				fmt.Printf("Type %+v \n", obj.Type().String())
-				typstr := types.TypeString(obj.Type(), types.RelativeTo(MainPackage))
+				// fmt.Printf("%+v\n", obj.Type())
+				typstr := types.TypeString(obj.Type(), nil)
+				fmt.Println("Type string", typstr)
 				decl := makeDecl(assign, ident, typstr, length)
 				decls = append(decls, decl)
 			}
